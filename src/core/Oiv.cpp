@@ -191,10 +191,13 @@ bool applyXmlCommands(QByteArray& xml, const QDomElement& xe, QString* err, QStr
             *notes << "unsupported xml command <" + t + ">";
         }
     }
+    // Keep the original XML declaration verbatim (QDom rewrites its quoting).
     QByteArray decl;
-    if (xml.trimmed().startsWith("<?xml")) decl = xml.left(xml.indexOf("?>") + 2) + "\n";
+    QByteArray trimmed = xml.trimmed();
+    if (trimmed.startsWith("\xEF\xBB\xBF")) trimmed = trimmed.mid(3);
+    if (trimmed.startsWith("<?xml")) decl = trimmed.left(trimmed.indexOf("?>") + 2) + "\n";
     QByteArray body = doc.toByteArray(2);
-    if (body.trimmed().startsWith("<?xml")) decl.clear();
+    if (body.startsWith("<?xml")) body = body.mid(body.indexOf("?>") + 2).trimmed() + "\n";
     xml = decl + body;
     return true;
 }

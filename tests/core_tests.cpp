@@ -214,6 +214,7 @@ static void testXmlAndText()
     QString e;
     CHECK(applyXmlCommands(xml, cmd.documentElement(), &e, nullptr));
     CHECK(xml.contains("dlcpacks:/mymod/") && !xml.contains("dlcpacks:/a/"));
+    CHECK(xml.startsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<SMandatoryPacksData>"));
 
     QDomDocument v;
     v.setContent(QByteArray("<L><Item><modelName>adder</modelName><x value=\"1\"/></Item><Item><modelName>zentorno</modelName><x value=\"2\"/></Item></L>"));

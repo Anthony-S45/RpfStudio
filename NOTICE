@@ -1,0 +1,6 @@
+Third-party material:
+
+- third_party/bcdec: bcdec by Sergii "iOrange" Kudlai, MIT or Unlicense (see third_party/bcdec/LICENSE).
+- src/core/KeyHashes.inc: SHA-1 hashes of GTA V key material from RageLib by Neodymium
+  (Copyright (c) 2015 Neodymium, MIT licence), as distributed with CodeWalker.
+- File format knowledge derived from CodeWalker (https://github.com/dexyfex/CodeWalker).
