@@ -225,8 +225,21 @@ bool preparePayload(RpfNode* n, RpfEntry& e, Payload& p, QString* err)
             return true;
         }
         if (n->name.compare(se.name, Qt::CaseInsensitive) != 0 && se.encrypted) {
-            if (err) *err = n->name + ": encrypted files cannot be renamed (the key depends on the name)";
-            return false;
+            // The NG key depends on the file name, so a renamed file is stored decrypted
+            // (allowed in OPEN archives, which is what OpenIV does too).
+            const GameKeys& keys = GameKeys::global();
+            if (!keys.hasNg()) { if (err) *err = n->name + ": NG keys are required to rename an encrypted file"; return false; }
+            if (se.type == RpfEntry::Resource) {
+                // Encrypted resources are scripts (.ysc); the game decides encryption by extension.
+                if (err) *err = n->name + ": encrypted script resources cannot be renamed";
+                return false;
+            }
+            QByteArray d = n->srcArchive->readStored(n->srcEntry);
+            ngDecrypt(d, se.name, se.uncompressedSize, keys);
+            e.encrypted = false;
+            p.kind = Payload::Bytes;
+            p.data = d;
+            return true;
         }
         p.kind = Payload::SrcRange;
         p.src = n->srcArchive->source();

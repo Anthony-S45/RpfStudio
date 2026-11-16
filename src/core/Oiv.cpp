@@ -130,10 +130,12 @@ QString applyTextCommands(const QString& original, const QDomElement& te, QStrin
 static QList<QDomNode> fragmentNodes(QDomDocument& doc, const QDomElement& cmd, QString* err)
 {
     QList<QDomNode> out;
-    bool hasElements = !cmd.firstChildElement().isNull();
-    if (hasElements) {
+    bool hasNodes = false;
+    for (QDomNode n = cmd.firstChild(); !n.isNull(); n = n.nextSibling())
+        if (n.isElement() || n.isComment()) hasNodes = true;
+    if (hasNodes) {
         for (QDomNode n = cmd.firstChild(); !n.isNull(); n = n.nextSibling())
-            if (n.isElement() || (n.isText() && !n.nodeValue().trimmed().isEmpty())) out << doc.importNode(n, true);
+            if (n.isElement() || n.isComment() || (n.isText() && !n.nodeValue().trimmed().isEmpty())) out << doc.importNode(n, true);
         return out;
     }
     QString text = cmd.text().trimmed();

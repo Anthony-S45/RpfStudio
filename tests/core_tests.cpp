@@ -173,6 +173,36 @@ static void testTextures()
     CHECK(again.textures.size() == 2 && again.find("third") >= 0 && again.textures[size_t(again.find("third"))].image.width == 8);
 }
 
+// Builds a minimal GTA V Enhanced (gen9, version 5) texture dictionary with one BC1 texture.
+static void testGen9Ytd()
+{
+    TextureImage src = encodeImage(testImage(16, 8), TexDXT1, true);
+    ResourceData rd;
+    rd.version = 5;
+    rd.system = QByteArray(0x200, 0);
+    char* s = rd.system.data();
+    wr64(s + 0x30, 0x50000100); wr16(s + 0x38, 1); wr16(s + 0x3A, 1);   // texture pointer list
+    wr64(s + 0x100, 0x50000180);                                        // -> texture struct
+    char* t = s + 0x180;                                                // gen9 texture (0x80 bytes)
+    wr16(t + 0x18, 16); wr16(t + 0x1A, 8); wr16(t + 0x1C, 1);
+    t[0x1F] = char(0x47);                                               // BC1_UNORM
+    t[0x22] = char(src.levels);
+    wr64(t + 0x28, 0x50000100 + 0x40);                                  // name
+    std::memcpy(s + 0x140, "gen9tex", 8);
+    wr64(t + 0x38, 0x60000000);                                         // data
+    rd.graphics = src.data;
+    TextureDictionary td;
+    QString e;
+    CHECK(td.load(rd.build(), &e));
+    CHECK(td.gen9 && td.textures.size() == 1);
+    if (td.textures.size() == 1) {
+        const auto& x = td.textures[0];
+        CHECK(x.name == "gen9tex" && x.image.format == TexDXT1 && x.image.width == 16 && x.image.height == 8);
+        CHECK(x.image.levels == src.levels && x.image.data == src.data);
+    }
+    CHECK(td.build(&e).isEmpty() && e.contains("Enhanced"));  // saving gen9 is refused, not corrupted
+}
+
 static void testGxt2AndRbf()
 {
     Gxt2 g;
@@ -341,6 +371,7 @@ int main(int argc, char** argv)
     testHashesAndRandom();
     testCompressionAndResource();
     testTextures();
+    testGen9Ytd();
     testGxt2AndRbf();
     testXmlAndText();
     testArchivesAndOiv();

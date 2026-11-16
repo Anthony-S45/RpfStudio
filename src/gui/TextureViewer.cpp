@@ -81,6 +81,7 @@ TextureViewer::TextureViewer(QWidget* parent) : Viewer(parent)
 bool TextureViewer::load(const QByteArray& ytd, QString* err)
 {
     if (!m_dict.load(ytd, err)) return false;
+    m_editable = !m_dict.gen9;  // Enhanced dictionaries are view/export only for now
     refreshList();
     return true;
 }

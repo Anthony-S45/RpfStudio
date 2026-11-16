@@ -132,7 +132,7 @@ void GLModelView::upload()
             if (texByName.count(key)) continue;
             QImage img = decodeTexture(t.image);
             if (img.isNull()) continue;
-            auto tex = std::make_unique<QOpenGLTexture>(img.mirrored(false, false));
+            auto tex = std::make_unique<QOpenGLTexture>(img);
             tex->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
             tex->setMagnificationFilter(QOpenGLTexture::Linear);
             tex->setWrapMode(QOpenGLTexture::Repeat);

@@ -52,6 +52,56 @@ int readComponent(const char* p, int type, float* out)
 
 struct ShaderInfo { QString diffuse; };
 
+const uint32_t* diffuseHashList(int& n)
+{
+    static const uint32_t h[] = {joaat("diffusesampler"), joaat("diffusesampler2"), joaat("texturesampler_layer0"),
+                                 joaat("diffusesamplerpoint"), joaat("texturesampler"), joaat("diffusetex"),
+                                 joaat("diffusetexture"), joaat("platebgsampler")};
+    n = int(sizeof(h) / sizeof(h[0]));
+    return h;
+}
+
+// Gen9 (Enhanced) shaders: textures are referenced through a param-info table.
+std::vector<ShaderInfo> readShadersGen9(const ResourceData& r, uint64_t shaderGroup)
+{
+    std::vector<ShaderInfo> out;
+    if (!r.valid(shaderGroup, 0x20)) return out;
+    uint64_t shadersPtr = r.u64(shaderGroup + 0x10);
+    uint16_t count = r.u16(shaderGroup + 0x18);
+    if (count > 1024 || !r.valid(shadersPtr, qint64(count) * 8)) return out;
+    int nd = 0;
+    const uint32_t* dh = diffuseHashList(nd);
+    for (int i = 0; i < count; ++i) {
+        ShaderInfo info;
+        uint64_t sp = r.u64(shadersPtr + uint64_t(i) * 8);
+        if (r.valid(sp, 0x40)) {
+            uint64_t texRefs = r.u64(sp + 0x10);
+            uint64_t infos = r.u64(sp + 0x20);
+            if (r.valid(infos, 8)) {
+                uint8_t numTex = r.u8(infos + 1), numParams = r.u8(infos + 4);
+                QString first;
+                for (int k = 0; k < numParams && r.valid(infos + 8 + uint64_t(k) * 8, 8); ++k) {
+                    uint32_t hash = r.u32(infos + 8 + uint64_t(k) * 8);
+                    uint32_t data = r.u32(infos + 12 + uint64_t(k) * 8);
+                    if ((data & 3) != 0) continue;  // not a texture
+                    uint32_t ti = (data >> 2) & 0xFF;
+                    if (ti >= numTex || !r.valid(texRefs + ti * 8, 8)) continue;
+                    uint64_t tex = r.u64(texRefs + ti * 8);
+                    if (!r.valid(tex, 0x30)) continue;
+                    QString name = r.cstr(r.u64(tex + 0x28));
+                    if (name.isEmpty()) continue;
+                    if (first.isEmpty()) first = name;
+                    for (int d = 0; d < nd; ++d)
+                        if (hash == dh[d] && info.diffuse.isEmpty()) info.diffuse = name;
+                }
+                if (info.diffuse.isEmpty()) info.diffuse = first;
+            }
+        }
+        out.push_back(info);
+    }
+    return out;
+}
+
 std::vector<ShaderInfo> readShaders(const ResourceData& r, uint64_t shaderGroup)
 {
     std::vector<ShaderInfo> out;
@@ -59,8 +109,8 @@ std::vector<ShaderInfo> readShaders(const ResourceData& r, uint64_t shaderGroup)
     uint64_t shadersPtr = r.u64(shaderGroup + 0x10);
     uint16_t count = r.u16(shaderGroup + 0x18);
     if (count > 1024 || !r.valid(shadersPtr, qint64(count) * 8)) return out;
-    static const uint32_t diffuseHashes[] = {joaat("diffusesampler"), joaat("diffusesampler2"), joaat("texturesampler_layer0"),
-                                             joaat("diffusesamplerpoint"), joaat("texturesampler")};
+    int nd = 0;
+    const uint32_t* dh = diffuseHashList(nd);
     for (int i = 0; i < count; ++i) {
         ShaderInfo info;
         uint64_t sp = r.u64(shadersPtr + uint64_t(i) * 8);
@@ -84,8 +134,8 @@ std::vector<ShaderInfo> readShaders(const ResourceData& r, uint64_t shaderGroup)
                     if (name.isEmpty()) continue;
                     uint32_t h = r.u32(hashes + uint64_t(k) * 4);
                     if (firstTex.isEmpty()) firstTex = name;
-                    for (uint32_t dh : diffuseHashes)
-                        if (h == dh && info.diffuse.isEmpty()) info.diffuse = name;
+                    for (int d = 0; d < nd; ++d)
+                        if (h == dh[d] && info.diffuse.isEmpty()) info.diffuse = name;
                 }
                 if (info.diffuse.isEmpty()) info.diffuse = firstTex;
             }
@@ -93,6 +143,82 @@ std::vector<ShaderInfo> readShaders(const ResourceData& r, uint64_t shaderGroup)
         out.push_back(info);
     }
     return out;
+}
+
+// Reads 3 floats from a gen9 vertex element; returns component count.
+int readGen9Element(const char* p, uint8_t fmt, float* out)
+{
+    switch (fmt) {
+    case 2: case 6: for (int i = 0; i < 3; ++i) out[i] = rdf(p + 4 * i); return 3;      // R32G32B32(A32)_FLOAT
+    case 10: for (int i = 0; i < 3; ++i) out[i] = halfToFloat(rd16(p + 2 * i)); return 3; // R16G16B16A16_FLOAT
+    case 16: out[0] = rdf(p); out[1] = rdf(p + 4); return 2;                                // R32G32 (float2)
+    case 34: out[0] = halfToFloat(rd16(p)); out[1] = halfToFloat(rd16(p + 2)); return 2;    // R16G16_FLOAT
+    case 24: {                                                                              // R10G10B10A2
+        uint32_t v = rd32(p);
+        for (int i = 0; i < 3; ++i) out[i] = float((v >> (10 * i)) & 0x3FF) / 511.5f - 1.f;
+        return 3;
+    }
+    case 28: case 30: for (int i = 0; i < 3; ++i) out[i] = uint8_t(p[i]) / 127.5f - 1.f; return 3;
+    default: return 0;
+    }
+}
+
+bool readGeometryGen9(const ResourceData& r, uint64_t gp, Mesh& m)
+{
+    if (!r.valid(gp, 0x98)) return false;
+    uint64_t vb = r.u64(gp + 0x18), ib = r.u64(gp + 0x38);
+    if (!r.valid(vb, 0x40) || !r.valid(ib, 0x20)) return false;
+    uint32_t vcount = r.u32(vb + 0x08);
+    uint16_t stride = r.u16(vb + 0x0C);
+    uint64_t vdata = r.u64(vb + 0x18);
+    uint64_t decl = r.u64(vb + 0x38);
+    if (!r.valid(decl, 52 * 6) || stride == 0 || vcount == 0 || vcount > 2000000) return false;
+    const char* v = r.at(vdata, qint64(stride) * vcount);
+    if (!v) return false;
+    auto elem = [&](int slot, uint32_t& off, uint32_t& estride, uint8_t& fmt) {
+        off = r.u32(decl + uint64_t(slot) * 4);
+        estride = r.u8(decl + 208 + uint64_t(slot));
+        fmt = r.u8(decl + 260 + uint64_t(slot));
+        if (!estride) estride = stride;
+        return fmt != 0 && qint64(off) + qint64(estride) * (vcount - 1) + 4 <= qint64(stride) * vcount;
+    };
+    uint32_t pOff, pStr, nOff, nStr, uOff, uStr;
+    uint8_t pFmt, nFmt, uFmt;
+    if (!elem(0, pOff, pStr, pFmt)) return false;      // POSITION
+    bool hasN = elem(4, nOff, nStr, nFmt);              // NORMAL
+    bool hasUv = elem(28, uOff, uStr, uFmt);            // TEXCOORD0
+    m.positions.resize(size_t(vcount) * 3);
+    if (hasN) m.normals.resize(size_t(vcount) * 3);
+    if (hasUv) m.uvs.resize(size_t(vcount) * 2);
+    for (uint32_t i = 0; i < vcount; ++i) {
+        float t[3] = {0, 0, 0};
+        if (readGen9Element(v + pOff + size_t(pStr) * i, pFmt, t) < 3) return false;
+        std::copy(t, t + 3, &m.positions[i * 3]);
+        if (hasN) {
+            float n[3] = {0, 0, 1};
+            readGen9Element(v + nOff + size_t(nStr) * i, nFmt, n);
+            std::copy(n, n + 3, &m.normals[i * 3]);
+        }
+        if (hasUv) {
+            float uv[3] = {0, 0, 0};
+            readGen9Element(v + uOff + size_t(uStr) * i, uFmt, uv);
+            m.uvs[i * 2] = uv[0];
+            m.uvs[i * 2 + 1] = uv[1];
+        }
+    }
+    uint32_t icount = r.u32(ib + 0x08);
+    uint64_t idata = r.u64(ib + 0x18);
+    const char* ip = r.at(idata, qint64(icount) * 2);
+    if (!ip) return false;
+    m.indices.reserve(icount);
+    for (uint32_t i = 0; i + 2 < icount; i += 3) {
+        uint16_t a = rd16(ip + i * 2), b = rd16(ip + i * 2 + 2), c = rd16(ip + i * 2 + 4);
+        if (a >= vcount || b >= vcount || c >= vcount) continue;
+        m.indices.push_back(a);
+        m.indices.push_back(b);
+        m.indices.push_back(c);
+    }
+    return true;
 }
 
 bool readGeometry(const ResourceData& r, uint64_t gp, Mesh& m)
@@ -157,7 +283,7 @@ bool readGeometry(const ResourceData& r, uint64_t gp, Mesh& m)
     return true;
 }
 
-bool readDrawable(const ResourceData& r, uint64_t dp, DrawableModel3D& out, bool hasName)
+bool readDrawable(const ResourceData& r, uint64_t dp, DrawableModel3D& out, bool hasName, bool gen9)
 {
     if (!r.valid(dp, 0xA8)) return false;
     for (int i = 0; i < 3; ++i) {
@@ -166,10 +292,10 @@ bool readDrawable(const ResourceData& r, uint64_t dp, DrawableModel3D& out, bool
     }
     if (hasName && r.valid(dp, 0xB0)) out.name = r.cstr(r.u64(dp + 0xA8));
     uint64_t sg = r.u64(dp + 0x10);
-    auto shaders = readShaders(r, sg);
+    auto shaders = gen9 ? readShadersGen9(r, sg) : readShaders(r, sg);
     if (r.valid(sg, 0x10)) {
         uint64_t td = r.u64(sg + 0x08);
-        if (td && r.valid(td, 0x40)) out.hasEmbeddedTextures = out.embeddedTextures.parseAt(r, td, nullptr);
+        if (td && r.valid(td, 0x40)) out.hasEmbeddedTextures = out.embeddedTextures.parseAt(r, td, nullptr, gen9);
     }
     static const char* lodNames[] = {"High", "Medium", "Low", "Very low"};
     for (int lod = 0; lod < 4; ++lod) {
@@ -187,7 +313,8 @@ bool readDrawable(const ResourceData& r, uint64_t dp, DrawableModel3D& out, bool
             if (gcount > 4096 || !r.valid(geoms, qint64(gcount) * 8)) continue;
             for (int gi = 0; gi < gcount; ++gi) {
                 Mesh m;
-                if (!readGeometry(r, r.u64(geoms + uint64_t(gi) * 8), m)) continue;
+                uint64_t gptr = r.u64(geoms + uint64_t(gi) * 8);
+                if (!(gen9 ? readGeometryGen9(r, gptr, m) : readGeometry(r, gptr, m))) continue;
                 if (r.valid(smap, qint64(gcount) * 2)) m.shaderIndex = r.u16(smap + uint64_t(gi) * 2);
                 if (m.shaderIndex >= 0 && size_t(m.shaderIndex) < shaders.size()) m.diffuseTexture = shaders[size_t(m.shaderIndex)].diffuse;
                 out.meshes.push_back(std::move(m));
@@ -206,10 +333,12 @@ bool loadDrawables(const QByteArray& rsc7, const QString& extIn, std::vector<Dra
     if (!r.load(rsc7, err)) return false;
     QString ext = extIn.toLower();
     const uint64_t root = 0x50000000;
+    // GTA V Enhanced resource versions (CodeWalker: Ydr 159/154, Ydd 159, Yft 171)
+    const bool gen9 = r.version == 159 || r.version == 154 || r.version == 171;
     out.clear();
     if (ext == "ydr") {
         DrawableModel3D m;
-        if (readDrawable(r, root, m, true)) out.push_back(std::move(m));
+        if (readDrawable(r, root, m, true, gen9)) out.push_back(std::move(m));
     } else if (ext == "ydd") {
         uint64_t hashes = r.u64(root + 0x20);
         uint64_t dptrs = r.u64(root + 0x30);
@@ -217,7 +346,7 @@ bool loadDrawables(const QByteArray& rsc7, const QString& extIn, std::vector<Dra
         if (count < 4096 && r.valid(dptrs, qint64(count) * 8)) {
             for (int i = 0; i < count; ++i) {
                 DrawableModel3D m;
-                if (readDrawable(r, r.u64(dptrs + uint64_t(i) * 8), m, true)) {
+                if (readDrawable(r, r.u64(dptrs + uint64_t(i) * 8), m, true, gen9)) {
                     if (m.name.isEmpty() && r.valid(hashes, qint64(count) * 4))
                         m.name = QStringLiteral("0x%1").arg(r.u32(hashes + uint64_t(i) * 4), 8, 16, QChar('0'));
                     out.push_back(std::move(m));
@@ -227,7 +356,7 @@ bool loadDrawables(const QByteArray& rsc7, const QString& extIn, std::vector<Dra
     } else if (ext == "yft") {
         uint64_t dp = r.u64(root + 0x30);
         DrawableModel3D m;
-        if (readDrawable(r, dp, m, false)) out.push_back(std::move(m));
+        if (readDrawable(r, dp, m, false, gen9)) out.push_back(std::move(m));
         // fragment name
         if (!out.empty() && r.valid(root, 0x60)) out[0].name = r.cstr(r.u64(root + 0x58));
     } else {
@@ -235,8 +364,7 @@ bool loadDrawables(const QByteArray& rsc7, const QString& extIn, std::vector<Dra
         return false;
     }
     if (out.empty()) {
-        if (err) *err = r.version == 165 || r.version == 162 ? "No readable geometry found" :
-                         QStringLiteral("No readable geometry found (resource version %1; Enhanced/gen9 models are not supported)").arg(r.version);
+        if (err) *err = QStringLiteral("No readable geometry found (resource version %1)").arg(r.version);
         return false;
     }
     return true;

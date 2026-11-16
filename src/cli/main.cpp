@@ -7,6 +7,7 @@
 #include "Rpf.h"
 #include "RpfWriter.h"
 #include "Texture.h"
+#include "Resource.h"
 #include "Ytd.h"
 
 #include <QCoreApplication>
@@ -17,6 +18,8 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <cstdio>
+#include <functional>
+#include <map>
 
 using namespace rs;
 
@@ -67,7 +70,8 @@ static void usage()
            "  rename <archive> <INNER> <new-name>\n"
            "  new <archive>                          create an empty archive\n"
            "  pack <folder> <archive>                folders named *.rpf become nested archives\n"
-           "  defrag <archive> [INNER-archive]       rebuild and compact\n\n"
+           "  defrag <archive> [INNER-archive]       rebuild and compact\n"
+           "  verify <archive> [-v]                  extract every file (incl. nested archives) in memory, report errors\n\n"
            "Formats:\n"
            "  ytd-list <file.ytd>\n"
            "  ytd-export <file.ytd> <outdir> [--png]\n"
@@ -307,6 +311,52 @@ int main(int argc, char** argv)
         if (!ok) return fail(err);
         out << "Packed " << args[1] << " -> " << args[2] << Qt::endl;
         return 0;
+    }
+    if (cmd == "verify") {
+        // Extracts every entry (recursively through nested archives) in memory.
+        if (!need(1)) return 1;
+        auto top = RpfArchive::openFile(args[1], &err);
+        if (!top) return fail(err);
+        bool verbose = args.contains("-v");
+        qint64 files = 0, archives = 0, failures = 0, bytes = 0, encrypted = 0;
+        std::map<uint32_t, qint64> resVersions;
+        std::map<QString, qint64> extCounts;
+        std::function<void(const std::shared_ptr<RpfArchive>&)> walk = [&](const std::shared_ptr<RpfArchive>& a) {
+            ++archives;
+            for (int i = 0; i < a->count(); ++i) {
+                const RpfEntry& e = a->entry(i);
+                if (e.isDir()) continue;
+                QString where = a->displayPath() + "/" + a->entryPath(i);
+                if (a->isArchiveEntry(i)) {
+                    QString cerr;
+                    auto c = a->child(i, &cerr);
+                    if (!c) { ++failures; errs << "FAIL archive " << where << ": " << cerr << Qt::endl; continue; }
+                    walk(c);
+                    continue;
+                }
+                ++files;
+                if (e.encrypted) ++encrypted;
+                if (e.isResource()) resVersions[e.resourceVersion()]++;
+                extCounts[QFileInfo(e.name).suffix().toLower()]++;
+                QByteArray d;
+                QString xerr;
+                if (!a->extract(i, d, &xerr)) { ++failures; errs << "FAIL " << where << ": " << xerr << Qt::endl; continue; }
+                if (e.isResource()) {
+                    ResourceData rd;
+                    if (!rd.load(d, &xerr)) { ++failures; errs << "FAIL resource " << where << ": " << xerr << Qt::endl; continue; }
+                }
+                bytes += d.size();
+                if (verbose) out << where << Qt::endl;
+            }
+        };
+        walk(top);
+        out << "Archives: " << archives << "  Files: " << files << "  Encrypted: " << encrypted
+            << "  Extracted: " << (bytes >> 20) << " MB  Failures: " << failures << "\nResource versions:";
+        for (auto& kv : resVersions) out << " v" << kv.first << "=" << kv.second;
+        out << "\nTypes:";
+        for (auto& kv : extCounts) if (kv.second >= 20) out << " " << (kv.first.isEmpty() ? "(none)" : kv.first) << "=" << kv.second;
+        out << Qt::endl;
+        return failures ? 2 : 0;
     }
     if (cmd == "defrag") {
         if (!need(1)) return 1;

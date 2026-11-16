@@ -14,17 +14,63 @@ bool TextureDictionary::load(const QByteArray& rsc7, QString* err)
     ResourceData res;
     if (!res.load(rsc7, err)) return false;
     version = res.version;
+    if (version == 5) return parseAt(res, 0x50000000, err, true);
     if (version != 13) {
-        if (err) *err = QStringLiteral("Unsupported texture dictionary version %1 (only legacy PC version 13 is supported;"
-                                       " Enhanced/gen9 textures are not)").arg(version);
+        if (err) *err = QStringLiteral("Unsupported texture dictionary version %1").arg(version);
         return false;
     }
-    return parseAt(res, 0x50000000, err);
+    return parseAt(res, 0x50000000, err, false);
 }
 
-bool TextureDictionary::parseAt(const ResourceData& res, uint64_t ptr, QString* err)
+static uint32_t gen9ToLegacyFormat(uint8_t f)
+{
+    switch (f) {
+    case 0x1C: case 0x1D: case 0x1B: return TexA8B8G8R8;
+    case 0x57: case 0x5A: case 0x5B: return TexA8R8G8B8;
+    case 0x58: case 0x5C: case 0x5D: return TexX8R8G8B8;
+    case 0x41: return TexA8;
+    case 0x3D: return TexL8;
+    case 0x56: return TexA1R5G5B5;
+    case 0x46: case 0x47: case 0x48: return TexDXT1;
+    case 0x49: case 0x4A: case 0x4B: return TexDXT3;
+    case 0x4C: case 0x4D: case 0x4E: return TexDXT5;
+    case 0x4F: case 0x50: case 0x51: return TexATI1;
+    case 0x52: case 0x53: case 0x54: return TexATI2;
+    case 0x61: case 0x62: case 0x63: return TexBC7;
+    default: return 0;
+    }
+}
+
+static bool parseGen9Texture(const ResourceData& res, uint64_t tp, YtdTexture& t)
+{
+    // rage::grcTexture (gen9): 0x80 bytes, see CodeWalker TextureBase/Texture (IsGen9)
+    if (!res.valid(tp, 0x50)) return false;
+    t.rawStruct = res.bytes(tp, res.valid(tp, 0x80) ? 0x80 : 0x50);
+    t.name = res.cstr(res.u64(tp + 0x28));
+    t.image.width = res.u16(tp + 0x18);
+    t.image.height = res.u16(tp + 0x1A);
+    int depth = std::max<int>(1, res.u16(tp + 0x1C));
+    t.gen9Format = res.u8(tp + 0x1F);
+    t.image.format = gen9ToLegacyFormat(t.gen9Format);
+    if (!t.image.format) t.image.format = 0xFF000000u | t.gen9Format;  // unknown: shown as such
+    t.image.levels = std::max<int>(1, res.u8(tp + 0x22));
+    uint64_t dataPtr = res.u64(tp + 0x38);
+    if (texFormatKnown(t.image.format)) {
+        qint64 len = texChainSize(t.image.format, t.image.width, t.image.height, t.image.levels) * depth;
+        const char* base = res.at(dataPtr, 1);
+        if (base) {
+            const QByteArray& seg = (dataPtr & 0xF0000000ull) == 0x60000000 ? res.graphics : res.system;
+            qint64 avail = seg.constData() + seg.size() - base;
+            t.image.data = QByteArray(base, int(std::min(avail, len)));
+        }
+    }
+    return true;
+}
+
+bool TextureDictionary::parseAt(const ResourceData& res, uint64_t ptr, QString* err, bool isGen9)
 {
     textures.clear();
+    gen9 = isGen9;
     if (!res.valid(ptr, DictSize)) { if (err) *err = "texture dictionary pointer out of range"; return false; }
     rawDict = res.bytes(ptr, DictSize);
     uint64_t texPtrs = res.u64(ptr + 0x30);
@@ -35,6 +81,11 @@ bool TextureDictionary::parseAt(const ResourceData& res, uint64_t ptr, QString* 
     }
     for (int i = 0; i < count; ++i) {
         uint64_t tp = res.u64(texPtrs + uint64_t(i) * 8);
+        if (gen9) {
+            YtdTexture t;
+            if (parseGen9Texture(res, tp, t)) textures.push_back(std::move(t));
+            continue;
+        }
         if (!res.valid(tp, TexStructSize)) continue;
         YtdTexture t;
         t.rawStruct = res.bytes(tp, TexStructSize);
@@ -101,6 +152,10 @@ static QByteArray defaultTexStruct()
 
 QByteArray TextureDictionary::build(QString* err) const
 {
+    if (gen9) {
+        if (err) *err = "Saving GTA V Enhanced (gen9) texture dictionaries is not supported yet";
+        return {};
+    }
     // Sort by name hash: the game binary-searches the hash list.
     struct Item { uint32_t hash; const YtdTexture* t; };
     std::vector<Item> items;

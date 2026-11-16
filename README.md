@@ -1,6 +1,6 @@
 # RpfStudio
 
-A GTA V archive explorer and modding tool for Linux, in the spirit of OpenIV. Qt 6 GUI, C++17 core, plus a command-line tool.
+A GTA V archive explorer and modding tool for Linux, in the spirit of OpenIV. Works with both GTA V Legacy and GTA V Enhanced. Qt 6 GUI, C++17 core, plus a command-line tool.
 
 Not affiliated with Rockstar Games or the OpenIV team. No game data or encryption keys are included: keys are read from your own copy of the game.
 
@@ -117,8 +117,9 @@ In `pack`, sub-folders named `*.rpf` become nested archives.
 
 ## Limitations (compared with OpenIV)
 
-- **Not yet verified against real game archives.** It was developed without access to GTA V files. The NG decryption and the formats follow CodeWalker's implementation exactly, and everything RpfStudio writes is tested by reading it back, but the first run against a real install is the real test.
-- Only the legacy PC version is supported. GTA V Enhanced (gen9) resources (textures and models) are not.
+- Tested against a real GTA V Enhanced install: every archive (including nested DLC archives) opens and every file extracts. Legacy-version files have not yet been tested against a real install.
+- GTA V Enhanced (gen9) textures and models are view/export only. Saving changes to an Enhanced .ytd is not supported yet (archives themselves can be edited normally).
+- Fragments (.yft) show the main body only; child parts such as wheels are not drawn.
 - Not implemented:
   - audio (.awc) playback
   - script (.ysc) viewing and importing
