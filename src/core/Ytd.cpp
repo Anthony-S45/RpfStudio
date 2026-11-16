@@ -14,12 +14,9 @@ bool TextureDictionary::load(const QByteArray& rsc7, QString* err)
     ResourceData res;
     if (!res.load(rsc7, err)) return false;
     version = res.version;
-    if (version == 5) return parseAt(res, 0x50000000, err, true);
-    if (version != 13) {
-        if (err) *err = QStringLiteral("Unsupported texture dictionary version %1").arg(version);
-        return false;
-    }
-    return parseAt(res, 0x50000000, err, false);
+    // 13 = legacy PC; everything else (5, and a few odd ones like 2) uses the Enhanced
+    // layout, matching CodeWalker's behaviour in gen9 mode.
+    return parseAt(res, 0x50000000, err, version != 13);
 }
 
 static uint32_t gen9ToLegacyFormat(uint8_t f)

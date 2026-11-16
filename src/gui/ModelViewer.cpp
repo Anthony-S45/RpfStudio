@@ -316,6 +316,11 @@ void ModelViewer::select(int i)
     const auto& m = m_models[size_t(i)];
     size_t tris = 0, verts = 0;
     for (auto& mesh : m.meshes) { tris += mesh.indices.size() / 3; verts += mesh.positions.size() / 3; }
+    if (m.meshes.empty()) {
+        m_info->setText(QStringLiteral("No geometry · %1 embedded textures (use \"Embedded textures...\")").arg(m.embeddedTextures.textures.size()));
+        m_view->setModel(&m, nullptr);
+        return;
+    }
     m_info->setText(QStringLiteral("LOD %1 · %2 meshes · %3 vertices · %4 triangles%5")
                         .arg(m.lodUsed).arg(m.meshes.size()).arg(verts).arg(tris)
                         .arg(m.hasEmbeddedTextures ? QStringLiteral(" · %1 embedded textures").arg(m.embeddedTextures.textures.size()) : QString()));

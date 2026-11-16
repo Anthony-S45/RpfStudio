@@ -322,7 +322,8 @@ bool readDrawable(const ResourceData& r, uint64_t dp, DrawableModel3D& out, bool
         }
         if (!out.meshes.empty()) { out.lodUsed = lodNames[lod]; break; }
     }
-    return !out.meshes.empty();
+    // Texture-only drawables (e.g. vehicle livery fragments) are still valid.
+    return !out.meshes.empty() || (out.hasEmbeddedTextures && !out.embeddedTextures.textures.empty());
 }
 
 } // namespace
@@ -359,12 +360,25 @@ bool loadDrawables(const QByteArray& rsc7, const QString& extIn, std::vector<Dra
         if (readDrawable(r, dp, m, false, gen9)) out.push_back(std::move(m));
         // fragment name
         if (!out.empty() && r.valid(root, 0x60)) out[0].name = r.cstr(r.u64(root + 0x58));
+        // Some fragments (e.g. livery mods) keep their geometry in the drawable array instead.
+        uint64_t arr = r.u64(root + 0x38), names = r.u64(root + 0x40);
+        uint32_t count = r.u32(root + 0x48);
+        if (count > 0 && count < 1024 && r.valid(arr, qint64(count) * 8)) {
+            for (uint32_t i = 0; i < count; ++i) {
+                DrawableModel3D am;
+                if (!readDrawable(r, r.u64(arr + uint64_t(i) * 8), am, false, gen9)) continue;
+                if (r.valid(names, qint64(count) * 8)) am.name = r.cstr(r.u64(names + uint64_t(i) * 8));
+                if (am.name.isEmpty()) am.name = QStringLiteral("array %1").arg(i);
+                out.push_back(std::move(am));
+            }
+        }
     } else {
         if (err) *err = "not a drawable type: " + ext;
         return false;
     }
     if (out.empty()) {
-        if (err) *err = QStringLiteral("No readable geometry found (resource version %1)").arg(r.version);
+        if (err) *err = r.graphics.isEmpty() ? QStringLiteral("This file contains no geometry (collision/physics data only)")
+                                             : QStringLiteral("No readable geometry found (resource version %1)").arg(r.version);
         return false;
     }
     return true;

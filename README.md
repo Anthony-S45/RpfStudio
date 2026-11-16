@@ -117,7 +117,7 @@ In `pack`, sub-folders named `*.rpf` become nested archives.
 
 ## Limitations (compared with OpenIV)
 
-- Tested against a real GTA V Enhanced install: every archive (including nested DLC archives) opens and every file extracts. Legacy-version files have not yet been tested against a real install.
+- Tested against a real GTA V Enhanced install (`rpfstudio-cli verify --parse` over every archive): 5,407 archives (including nested DLC archives) and 388,445 files extract; 89,816 texture dictionaries and 168,776 models parse. The only failure is `x64a.rpf/textures/parachute_decals.ytd`, whose compressed data is corrupt in the game files. Legacy-version files have not yet been tested against a real install.
 - GTA V Enhanced (gen9) textures and models are view/export only. Saving changes to an Enhanced .ytd is not supported yet (archives themselves can be edited normally).
 - Fragments (.yft) show the main body only; child parts such as wheels are not drawn.
 - Not implemented:

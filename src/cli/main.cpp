@@ -71,7 +71,7 @@ static void usage()
            "  new <archive>                          create an empty archive\n"
            "  pack <folder> <archive>                folders named *.rpf become nested archives\n"
            "  defrag <archive> [INNER-archive]       rebuild and compact\n"
-           "  verify <archive> [-v]                  extract every file (incl. nested archives) in memory, report errors\n\n"
+           "  verify <archive> [-v] [--parse]        extract every file (incl. nested archives) in memory, report errors\n\n"
            "Formats:\n"
            "  ytd-list <file.ytd>\n"
            "  ytd-export <file.ytd> <outdir> [--png]\n"
@@ -318,6 +318,8 @@ int main(int argc, char** argv)
         auto top = RpfArchive::openFile(args[1], &err);
         if (!top) return fail(err);
         bool verbose = args.contains("-v");
+        bool parse = args.contains("--parse");
+        qint64 parsedTex = 0, parsedModels = 0, parseFailures = 0;
         qint64 files = 0, archives = 0, failures = 0, bytes = 0, encrypted = 0;
         std::map<uint32_t, qint64> resVersions;
         std::map<QString, qint64> extCounts;
@@ -345,6 +347,16 @@ int main(int argc, char** argv)
                     ResourceData rd;
                     if (!rd.load(d, &xerr)) { ++failures; errs << "FAIL resource " << where << ": " << xerr << Qt::endl; continue; }
                 }
+                QString ext = QFileInfo(e.name).suffix().toLower();
+                if (parse && e.isResource() && ext == "ytd") {
+                    TextureDictionary td;
+                    if (td.load(d, &xerr)) ++parsedTex;
+                    else { ++parseFailures; errs << "PARSE " << where << ": " << xerr << Qt::endl; }
+                } else if (parse && e.isResource() && (ext == "ydr" || ext == "ydd" || ext == "yft")) {
+                    std::vector<DrawableModel3D> models;
+                    if (loadDrawables(d, ext, models, &xerr)) ++parsedModels;
+                    else { ++parseFailures; errs << "PARSE " << where << ": " << xerr << Qt::endl; }
+                }
                 bytes += d.size();
                 if (verbose) out << where << Qt::endl;
             }
@@ -353,6 +365,7 @@ int main(int argc, char** argv)
         out << "Archives: " << archives << "  Files: " << files << "  Encrypted: " << encrypted
             << "  Extracted: " << (bytes >> 20) << " MB  Failures: " << failures << "\nResource versions:";
         for (auto& kv : resVersions) out << " v" << kv.first << "=" << kv.second;
+        if (parse) out << "\nParsed: " << parsedTex << " texture dictionaries, " << parsedModels << " models, " << parseFailures << " parse failures";
         out << "\nTypes:";
         for (auto& kv : extCounts) if (kv.second >= 20) out << " " << (kv.first.isEmpty() ? "(none)" : kv.first) << "=" << kv.second;
         out << Qt::endl;
