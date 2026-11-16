@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=RpfStudio
+Comment=GTA V archive explorer and modding tool
+Exec=rpfstudio
+Icon=applications-games
+Categories=Game;Utility;
